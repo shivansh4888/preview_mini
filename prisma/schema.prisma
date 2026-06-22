@@ -1,0 +1,21 @@
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Endpoint {
+  id          String   @id @default(cuid())
+  name        String
+  endpointUrl String
+  // Generic HTTP token (used for mock/custom REST endpoints)
+  token       String   @default("")
+  // S3-compatible fields (used for Zata.ai and other S3-compatible storage)
+  accessKeyId String   @default("")
+  secretKey   String   @default("")
+  bucket      String   @default("")
+  createdAt   DateTime @default(now())
+}

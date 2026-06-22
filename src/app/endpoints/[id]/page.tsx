@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState, use, useRef } from "react";
+import React, { useCallback, useEffect, useState, use, useRef } from "react";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -11,7 +11,6 @@ import {
   AlertCircle,
   RefreshCw,
   HardDrive,
-  Folder,
   FileText,
   FileImage,
   FileCode,
@@ -127,27 +126,22 @@ function FileThumbnail({ file, endpointId }: { file: FileItem; endpointId: strin
   const previewRef = useRef<HTMLDivElement>(null);
   const fileType = getFileType(file);
   const previewUrl = getPreviewUrl(endpointId, file.filename);
-  const [imageFailed, setImageFailed] = useState(false);
+  const [failedImageUrl, setFailedImageUrl] = useState<string | null>(null);
   const [shouldLoadText, setShouldLoadText] = useState(false);
   const [textStatus, setTextStatus] = useState<"idle" | "loading" | "loaded" | "error">("idle");
   const [textPreview, setTextPreview] = useState("");
 
-  const canShowImagePreview = isImageType(fileType) && !imageFailed;
+  const canShowImagePreview = isImageType(fileType) && failedImageUrl !== previewUrl;
   const canShowTextPreview = isTextPreviewType(fileType) && file.fileSize <= MAX_TEXT_THUMBNAIL_SIZE;
-
-  useEffect(() => {
-    setImageFailed(false);
-  }, [previewUrl]);
 
   useEffect(() => {
     if (!canShowTextPreview) return;
 
-    setShouldLoadText(false);
     const node = previewRef.current;
 
     if (!node || typeof IntersectionObserver === "undefined") {
-      setShouldLoadText(true);
-      return;
+      const timeout = window.setTimeout(() => setShouldLoadText(true), 0);
+      return () => window.clearTimeout(timeout);
     }
 
     const observer = new IntersectionObserver(
@@ -218,7 +212,7 @@ function FileThumbnail({ file, endpointId }: { file: FileItem; endpointId: strin
           alt=""
           loading="lazy"
           className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
-          onError={() => setImageFailed(true)}
+          onError={() => setFailedImageUrl(previewUrl)}
         />
         <div className="absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-slate-950/25 to-transparent opacity-0 transition-opacity duration-200 group-hover:opacity-100" />
       </div>
@@ -266,19 +260,14 @@ export default function FileBrowserPage({ params }: FileBrowserPageProps) {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    fetchEndpointDetails();
-    fetchFiles(true);
-  }, [id]);
-
-  const fetchEndpointDetails = async () => {
+  const fetchEndpointDetails = useCallback(async () => {
     try {
       const res = await fetch(`/api/endpoints/${id}`);
       if (res.ok) setEndpoint(await res.json());
     } catch {}
-  };
+  }, [id]);
 
-  const fetchFiles = async (initial = false) => {
+  const fetchFiles = useCallback(async (initial = false) => {
     try {
       if (initial) setLoading(true);
       else setRefreshing(true);
@@ -289,13 +278,22 @@ export default function FileBrowserPage({ params }: FileBrowserPageProps) {
         throw new Error(d.error || "Failed to load files");
       }
       setFiles(await res.json());
-    } catch (err: any) {
-      setError(err.message || "Failed to fetch files.");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to fetch files.");
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  };
+  }, [id]);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      fetchEndpointDetails();
+      fetchFiles(true);
+    }, 0);
+
+    return () => window.clearTimeout(timeout);
+  }, [fetchEndpointDetails, fetchFiles]);
 
   const filteredFiles = files.filter((f) =>
     f.filename.toLowerCase().includes(searchQuery.toLowerCase())

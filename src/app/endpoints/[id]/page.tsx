@@ -7,6 +7,7 @@ import {
   Search,
   Download,
   Eye,
+  X,
   Loader2,
   AlertCircle,
   RefreshCw,
@@ -63,6 +64,8 @@ const TEXT_PREVIEW_EXTENSIONS = [
 ];
 const MAX_TEXT_THUMBNAIL_SIZE = 256 * 1024;
 const MAX_TEXT_THUMBNAIL_CHARS = 1800;
+const PDF_EXTENSIONS = ["pdf"];
+const MAX_SIDE_PREVIEW_CHARS = 100 * 1024;
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";
@@ -91,6 +94,10 @@ function isTextPreviewType(type: string): boolean {
 
 function getPreviewUrl(endpointId: string, filename: string): string {
   return `/api/files/preview?endpointId=${encodeURIComponent(endpointId)}&filename=${encodeURIComponent(filename)}`;
+}
+
+function getDownloadUrl(endpointId: string, filename: string): string {
+  return `/api/files/download?endpointId=${encodeURIComponent(endpointId)}&filename=${encodeURIComponent(filename)}`;
 }
 
 function getFileIcon(type: string, large = false) {
@@ -250,12 +257,182 @@ function FileThumbnail({ file, endpointId }: { file: FileItem; endpointId: strin
   );
 }
 
+function PreviewInspector({
+  file,
+  endpointId,
+  onClose,
+}: {
+  file: FileItem;
+  endpointId: string;
+  onClose: () => void;
+}) {
+  const fileType = getFileType(file);
+  const previewUrl = getPreviewUrl(endpointId, file.filename);
+  const downloadUrl = getDownloadUrl(endpointId, file.filename);
+  const isImage = isImageType(fileType);
+  const isPdf = PDF_EXTENSIONS.includes(fileType);
+  const isText = isTextPreviewType(fileType);
+  const [textContents, setTextContents] = useState("");
+  const [textLoading, setTextLoading] = useState(false);
+  const [textError, setTextError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isText) return;
+
+    const controller = new AbortController();
+
+    const loadTextPreview = async () => {
+      try {
+        setTextLoading(true);
+        setTextError(null);
+        setTextContents("");
+
+        const response = await fetch(previewUrl, { signal: controller.signal });
+        if (!response.ok) throw new Error(`Error ${response.status}`);
+
+        const reader = response.body?.getReader();
+        let result = "";
+        let bytes = 0;
+
+        if (reader) {
+          const decoder = new TextDecoder();
+
+          while (bytes < MAX_SIDE_PREVIEW_CHARS) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            result += decoder.decode(value, { stream: true });
+            bytes += value.byteLength;
+          }
+
+          result += decoder.decode();
+          await reader.cancel().catch(() => {});
+        } else {
+          result = await response.text();
+          bytes = result.length;
+        }
+
+        if (bytes >= MAX_SIDE_PREVIEW_CHARS) {
+          result += "\n\n[... Preview truncated at 100KB. Download to view full file ...]";
+        }
+
+        if (controller.signal.aborted) return;
+        setTextContents(result);
+      } catch (err: unknown) {
+        if (!controller.signal.aborted) {
+          setTextError(err instanceof Error ? err.message : "Failed to load file.");
+        }
+      } finally {
+        if (!controller.signal.aborted) setTextLoading(false);
+      }
+    };
+
+    loadTextPreview();
+    return () => controller.abort();
+  }, [isText, previewUrl]);
+
+  return (
+    <aside className="flex w-full shrink-0 flex-col border-t border-slate-200 bg-white md:h-full md:w-[420px] md:border-l md:border-t-0 lg:w-[480px]">
+      <div className="flex items-start gap-3 border-b border-slate-100 px-4 py-3">
+        <div className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${getIconBg(fileType)}`}>
+          {getFileIcon(fileType, false)}
+        </div>
+        <div className="min-w-0 flex-1">
+          <h2 className="truncate text-sm font-semibold text-slate-900" title={file.filename}>
+            {file.filename}
+          </h2>
+          <p className="mt-0.5 text-[11px] font-medium uppercase tracking-wide text-slate-400">
+            {formatBytes(file.fileSize)} · {fileType || "file"}
+          </p>
+        </div>
+        <a
+          href={downloadUrl}
+          title="Download"
+          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-200 text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-900"
+        >
+          <Download size={15} />
+        </a>
+        <button
+          type="button"
+          onClick={onClose}
+          title="Close preview"
+          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-200 text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-900"
+        >
+          <X size={15} />
+        </button>
+      </div>
+
+      <div className="flex min-h-[420px] flex-1 flex-col overflow-auto bg-slate-50/60 md:min-h-0">
+        {isImage && (
+          <div className="flex min-h-full flex-1 items-center justify-center p-4">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={previewUrl}
+              alt={file.filename}
+              className="max-h-[calc(100vh-240px)] max-w-full rounded-lg border border-slate-200 bg-white object-contain shadow-sm"
+            />
+          </div>
+        )}
+
+        {isPdf && (
+          <iframe
+            src={previewUrl}
+            title={file.filename}
+            className="h-full min-h-[560px] w-full border-0 bg-white"
+          />
+        )}
+
+        {isText && (
+          <div className="flex min-h-full flex-1 flex-col p-4">
+            {textLoading ? (
+              <div className="flex flex-1 flex-col items-center justify-center gap-2">
+                <Loader2 className="animate-spin text-blue-500" size={22} />
+                <p className="text-xs text-slate-400">Loading preview...</p>
+              </div>
+            ) : textError ? (
+              <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center">
+                <AlertCircle className="text-red-400" size={26} />
+                <p className="text-sm font-semibold text-slate-700">Failed to read file</p>
+                <p className="max-w-xs text-xs leading-relaxed text-slate-400">{textError}</p>
+              </div>
+            ) : (
+              <pre className="min-h-[360px] flex-1 overflow-auto rounded-lg border border-slate-200 bg-white p-4 font-mono text-xs leading-relaxed text-slate-700 whitespace-pre-wrap">
+                {textContents}
+              </pre>
+            )}
+          </div>
+        )}
+
+        {!isImage && !isPdf && !isText && (
+          <div className="flex flex-1 flex-col items-center justify-center gap-4 p-8 text-center">
+            <div className="rounded-xl bg-slate-100 p-4 text-slate-400">
+              <FileText size={34} strokeWidth={1.5} />
+            </div>
+            <div>
+              <h2 className="text-sm font-semibold text-slate-800">Preview Not Available</h2>
+              <p className="mt-1 max-w-xs text-xs leading-relaxed text-slate-400">
+                Download this file to view it locally.
+              </p>
+            </div>
+            <a
+              href={downloadUrl}
+              className="inline-flex items-center gap-2 rounded-lg bg-slate-800 px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-slate-700"
+            >
+              <Download size={14} /> Download
+            </a>
+          </div>
+        )}
+      </div>
+    </aside>
+  );
+}
+
 export default function FileBrowserPage({ params }: FileBrowserPageProps) {
   const { id } = use(params);
 
   const [endpoint, setEndpoint] = useState<Endpoint | null>(null);
   const [files, setFiles] = useState<FileItem[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
+  const [selectedFilename, setSelectedFilename] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -298,6 +475,12 @@ export default function FileBrowserPage({ params }: FileBrowserPageProps) {
   const filteredFiles = files.filter((f) =>
     f.filename.toLowerCase().includes(searchQuery.toLowerCase())
   );
+  const selectedFile = selectedFilename
+    ? files.find((file) => file.filename === selectedFilename) ?? null
+    : null;
+  const gridColumns = selectedFile
+    ? "grid-cols-2 sm:grid-cols-3 lg:grid-cols-3 xl:grid-cols-4"
+    : "grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6";
 
   return (
     <div className="space-y-6 flex-1 flex flex-col">
@@ -335,7 +518,7 @@ export default function FileBrowserPage({ params }: FileBrowserPageProps) {
       </div>
 
       {/* Main Panel */}
-      <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden flex-1 flex flex-col">
+      <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden flex-1 min-h-0 flex flex-col">
         {/* Search Bar */}
         <div className="border-b border-slate-100 px-5 py-3 flex items-center justify-between gap-4 bg-slate-50/60">
           <div className="relative flex-1 max-w-sm">
@@ -356,91 +539,107 @@ export default function FileBrowserPage({ params }: FileBrowserPageProps) {
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-auto p-6">
-          {loading ? (
-            <div className="flex flex-col items-center justify-center py-20">
-              <Loader2 className="animate-spin text-blue-500 mb-3" size={28} />
-              <p className="text-slate-400 text-sm">Loading files...</p>
-            </div>
-          ) : error ? (
-            <div className="flex flex-col items-center justify-center text-center py-16 max-w-md mx-auto space-y-4">
-              <div className="p-3 bg-red-50 text-red-500 rounded-2xl">
-                <AlertCircle size={28} />
+        <div className="flex flex-1 min-h-0 flex-col overflow-auto md:flex-row md:overflow-hidden">
+          <div className="min-w-0 flex-1 p-6 md:overflow-auto">
+            {loading ? (
+              <div className="flex flex-col items-center justify-center py-20">
+                <Loader2 className="animate-spin text-blue-500 mb-3" size={28} />
+                <p className="text-slate-400 text-sm">Loading files...</p>
               </div>
-              <h3 className="text-sm font-semibold text-slate-800">Connection Error</h3>
-              <p className="text-slate-400 text-xs leading-relaxed">{error}</p>
-              <button
-                onClick={() => fetchFiles(false)}
-                className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-xs font-semibold rounded-lg text-white transition-colors"
-              >
-                <RefreshCw size={12} /> Retry
-              </button>
-            </div>
-          ) : filteredFiles.length === 0 ? (
-            <div className="flex flex-col items-center justify-center text-center py-20">
-              <div className="p-4 bg-blue-50 text-blue-400 rounded-2xl mb-4">
-                <HardDrive size={32} strokeWidth={1.5} />
+            ) : error ? (
+              <div className="flex flex-col items-center justify-center text-center py-16 max-w-md mx-auto space-y-4">
+                <div className="p-3 bg-red-50 text-red-500 rounded-2xl">
+                  <AlertCircle size={28} />
+                </div>
+                <h3 className="text-sm font-semibold text-slate-800">Connection Error</h3>
+                <p className="text-slate-400 text-xs leading-relaxed">{error}</p>
+                <button
+                  onClick={() => fetchFiles(false)}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-xs font-semibold rounded-lg text-white transition-colors"
+                >
+                  <RefreshCw size={12} /> Retry
+                </button>
               </div>
-              <h3 className="text-sm font-semibold text-slate-700">No files found</h3>
-              <p className="text-slate-400 text-xs mt-1">
-                {searchQuery ? "No files match your search." : "This endpoint is empty."}
-              </p>
-            </div>
-          ) : (
-            <>
-              <p className="text-xs font-semibold text-slate-500 mb-4 uppercase tracking-wider">Files &amp; Folders</p>
-              {/* Grid of large icon cards */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
-                {filteredFiles.map((file) => {
-                  const fileType = getFileType(file);
+            ) : filteredFiles.length === 0 ? (
+              <div className="flex flex-col items-center justify-center text-center py-20">
+                <div className="p-4 bg-blue-50 text-blue-400 rounded-2xl mb-4">
+                  <HardDrive size={32} strokeWidth={1.5} />
+                </div>
+                <h3 className="text-sm font-semibold text-slate-700">No files found</h3>
+                <p className="text-slate-400 text-xs mt-1">
+                  {searchQuery ? "No files match your search." : "This endpoint is empty."}
+                </p>
+              </div>
+            ) : (
+              <>
+                <p className="text-xs font-semibold text-slate-500 mb-4 uppercase tracking-wider">Files &amp; Folders</p>
+                {/* Grid of large icon cards */}
+                <div className={`grid gap-4 ${gridColumns}`}>
+                  {filteredFiles.map((file) => {
+                    const fileType = getFileType(file);
+                    const isSelected = selectedFilename === file.filename;
 
-                  return (
-                    <div
-                      key={file.filename}
-                      className="group relative flex flex-col rounded-2xl border border-slate-200 bg-slate-50 hover:border-blue-300 hover:shadow-md transition-all duration-200 cursor-pointer overflow-hidden"
-                    >
-                      <FileThumbnail file={file} endpointId={id} />
+                    return (
+                      <div
+                        key={file.filename}
+                        className={`group relative flex flex-col rounded-2xl bg-slate-50 hover:shadow-md transition-all duration-200 cursor-pointer overflow-hidden ${
+                          isSelected
+                            ? "border border-blue-400 ring-2 ring-blue-100"
+                            : "border border-slate-200 hover:border-blue-300"
+                        }`}
+                      >
+                        <FileThumbnail file={file} endpointId={id} />
 
-                      {/* Filename Footer */}
-                      <div className="bg-white border-t border-slate-100 px-3 py-2.5 flex items-center gap-1.5 min-w-0">
-                        <span className="shrink-0 text-slate-400">{getFileIcon(fileType, false)}</span>
-                        <span
-                          className="text-xs font-medium text-slate-700 truncate"
-                          title={file.filename}
-                        >
-                          {file.filename}
-                        </span>
-                      </div>
-
-                      {/* Hover Overlay with actions */}
-                      <div className="absolute inset-0 bg-blue-600/90 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex flex-col items-center justify-center gap-2 rounded-2xl">
-                        <p className="text-white text-[10px] font-semibold px-3 text-center truncate w-full">
-                          {file.filename}
-                        </p>
-                        <p className="text-blue-200 text-[10px]">
-                          {formatBytes(file.fileSize)} · {fileType ? fileType.toUpperCase() : "FILE"}
-                        </p>
-                        <div className="flex gap-2 mt-1">
-                          <Link
-                            href={`/preview/${encodeURIComponent(file.filename)}?endpointId=${id}`}
-                            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white text-blue-600 text-xs font-semibold hover:bg-blue-50 transition-colors"
+                        {/* Filename Footer */}
+                        <div className="bg-white border-t border-slate-100 px-3 py-2.5 flex items-center gap-1.5 min-w-0">
+                          <span className="shrink-0 text-slate-400">{getFileIcon(fileType, false)}</span>
+                          <span
+                            className="text-xs font-medium text-slate-700 truncate"
+                            title={file.filename}
                           >
-                            <Eye size={12} /> Preview
-                          </Link>
-                          <a
-                            href={`/api/files/download?endpointId=${id}&filename=${encodeURIComponent(file.filename)}`}
-                            className="inline-flex items-center justify-center p-1.5 rounded-lg bg-white/20 text-white hover:bg-white/30 transition-colors"
-                            title="Download"
-                          >
-                            <Download size={14} />
-                          </a>
+                            {file.filename}
+                          </span>
+                        </div>
+
+                        {/* Hover Overlay with actions */}
+                        <div className="absolute inset-0 bg-blue-600/90 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex flex-col items-center justify-center gap-2 rounded-2xl">
+                          <p className="text-white text-[10px] font-semibold px-3 text-center truncate w-full">
+                            {file.filename}
+                          </p>
+                          <p className="text-blue-200 text-[10px]">
+                            {formatBytes(file.fileSize)} · {fileType ? fileType.toUpperCase() : "FILE"}
+                          </p>
+                          <div className="flex gap-2 mt-1">
+                            <button
+                              type="button"
+                              onClick={() => setSelectedFilename(file.filename)}
+                              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white text-blue-600 text-xs font-semibold hover:bg-blue-50 transition-colors"
+                            >
+                              <Eye size={12} /> Preview
+                            </button>
+                            <a
+                              href={getDownloadUrl(id, file.filename)}
+                              className="inline-flex items-center justify-center p-1.5 rounded-lg bg-white/20 text-white hover:bg-white/30 transition-colors"
+                              title="Download"
+                            >
+                              <Download size={14} />
+                            </a>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </div>
+
+          {selectedFile && (
+            <PreviewInspector
+              file={selectedFile}
+              endpointId={id}
+              onClose={() => setSelectedFilename(null)}
+            />
           )}
         </div>
       </div>

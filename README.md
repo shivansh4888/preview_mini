@@ -1,6 +1,6 @@
 ## About
-This project serves as a preview manager where users can get a preview of their files (jpeg,png,mp3,mp4,pdf,docx,code files etc..) without ever downloading the files ,just by connecting their endpoints (specifying the location of the files and their access credentials.) This project was specifically made for an add on for the zata.ai institute .
-The project is op
+This project serves as a preview manager where users can get a preview of their files (jpeg,png,mp3,mp4,pdf,docx,code files etc..) without ever downloading the files ,just by connecting their endpoints (specifying the location of the files and their access credentials.) This project was specifically made as an add on for the zata.ai .
+The project is open to all sorts of contribution.
 
 ## Getting Started
 

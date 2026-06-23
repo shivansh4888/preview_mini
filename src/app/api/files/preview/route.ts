@@ -12,6 +12,10 @@ function getMimeType(filename: string): string {
     case "webp": return "image/webp";
     case "svg": return "image/svg+xml";
     case "pdf": return "application/pdf";
+    case "mp4": case "m4v": return "video/mp4";
+    case "webm": return "video/webm";
+    case "mov": return "video/quicktime";
+    case "ogv": case "ogg": return "video/ogg";
     case "txt": case "log": return "text/plain; charset=utf-8";
     case "json": return "application/json; charset=utf-8";
     case "csv": return "text/csv; charset=utf-8";
@@ -21,11 +25,21 @@ function getMimeType(filename: string): string {
   }
 }
 
+function resolveContentType(filename: string, contentType?: string | null): string {
+  const normalized = contentType?.split(";")[0]?.trim().toLowerCase();
+  if (!normalized || normalized === "application/octet-stream" || normalized === "binary/octet-stream") {
+    return getMimeType(filename);
+  }
+
+  return contentType ?? getMimeType(filename);
+}
+
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     const endpointId = searchParams.get("endpointId");
     const filename = searchParams.get("filename");
+    const range = request.headers.get("range") || undefined;
 
     if (!endpointId || !filename) {
       return NextResponse.json({ error: "Missing required parameters: endpointId and filename" }, { status: 400 });
@@ -40,23 +54,32 @@ export async function GET(request: Request) {
     if (isS3Mode(endpoint)) {
       try {
         const s3 = createS3Client(endpoint.endpointUrl, endpoint.accessKeyId, endpoint.secretKey);
-        const response = await s3.send(new GetObjectCommand({ Bucket: endpoint.bucket, Key: filename }));
+        const response = await s3.send(new GetObjectCommand({ Bucket: endpoint.bucket, Key: filename, Range: range }));
 
-        const contentType = response.ContentType || getMimeType(filename);
+        const contentType = resolveContentType(filename, response.ContentType);
         const body = response.Body;
         if (!body) throw new Error("Empty response from S3");
 
-        // Stream the body
+        const headers = new Headers({
+          "Content-Type": contentType,
+          "Content-Disposition": `inline; filename="${filename}"`,
+          "Accept-Ranges": response.AcceptRanges || "bytes",
+        });
+
+        if (response.ContentLength !== undefined) headers.set("Content-Length", String(response.ContentLength));
+        if (response.ContentRange) headers.set("Content-Range", response.ContentRange);
+        if (response.ETag) headers.set("ETag", response.ETag);
+        if (response.LastModified) headers.set("Last-Modified", response.LastModified.toUTCString());
+
         const stream = body.transformToWebStream();
         return new Response(stream, {
-          headers: {
-            "Content-Type": contentType,
-            "Content-Disposition": `inline; filename="${filename}"`,
-          },
+          status: response.ContentRange ? 206 : 200,
+          headers,
         });
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.error("S3 GetObject failed:", err);
-        return NextResponse.json({ error: `S3 Error: ${err?.message || "Failed to fetch file"}` }, { status: 502 });
+        const message = err instanceof Error ? err.message : "Failed to fetch file";
+        return NextResponse.json({ error: `S3 Error: ${message}` }, { status: 502 });
       }
     }
 
@@ -72,6 +95,7 @@ export async function GET(request: Request) {
         headers: {
           Authorization: `Bearer ${endpoint.token}`,
           "x-api-key": endpoint.token,
+          ...(range ? { Range: range } : {}),
         },
       });
 
@@ -79,17 +103,26 @@ export async function GET(request: Request) {
         return NextResponse.json({ error: `Target endpoint returned ${response.status}: ${response.statusText}` }, { status: response.status });
       }
 
-      const data = await response.arrayBuffer();
-      const contentType = response.headers.get("content-type") || getMimeType(filename);
-
-      return new Response(data, {
-        headers: {
-          "Content-Type": contentType,
-          "Content-Disposition": `inline; filename="${filename}"`,
-        },
+      const contentType = resolveContentType(filename, response.headers.get("content-type"));
+      const headers = new Headers({
+        "Content-Type": contentType,
+        "Content-Disposition": `inline; filename="${filename}"`,
       });
-    } catch (fetchError: any) {
-      return NextResponse.json({ error: `Failed to fetch file: ${fetchError.message || "Network error"}` }, { status: 502 });
+
+      const forwardedHeaders = ["accept-ranges", "content-length", "content-range", "etag", "last-modified"];
+      for (const header of forwardedHeaders) {
+        const value = response.headers.get(header);
+        if (value) headers.set(header, value);
+      }
+
+      const body = response.body ?? (await response.arrayBuffer());
+      return new Response(body, {
+        status: response.status,
+        headers,
+      });
+    } catch (fetchError: unknown) {
+      const message = fetchError instanceof Error ? fetchError.message : "Network error";
+      return NextResponse.json({ error: `Failed to fetch file: ${message}` }, { status: 502 });
     }
   } catch (error) {
     console.error("Preview API error:", error);

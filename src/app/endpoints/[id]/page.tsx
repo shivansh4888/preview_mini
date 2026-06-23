@@ -14,6 +14,7 @@ import {
   HardDrive,
   FileText,
   FileImage,
+  FileVideo,
   FileCode,
   File,
 } from "lucide-react";
@@ -36,6 +37,7 @@ interface FileBrowserPageProps {
 }
 
 const IMAGE_EXTENSIONS = ["jpg", "jpeg", "png", "gif", "webp", "svg"];
+const VIDEO_EXTENSIONS = ["mp4", "m4v", "webm", "mov", "ogv", "ogg"];
 const CODE_EXTENSIONS = [
   "json",
   "xml",
@@ -88,8 +90,20 @@ function isImageType(type: string): boolean {
   return IMAGE_EXTENSIONS.includes(type.toLowerCase());
 }
 
+function isVideoType(type: string): boolean {
+  return VIDEO_EXTENSIONS.includes(type.toLowerCase());
+}
+
 function isTextPreviewType(type: string): boolean {
   return TEXT_PREVIEW_EXTENSIONS.includes(type.toLowerCase());
+}
+
+function getVideoMimeType(type: string): string {
+  const t = type.toLowerCase();
+  if (t === "webm") return "video/webm";
+  if (t === "mov") return "video/quicktime";
+  if (t === "ogv" || t === "ogg") return "video/ogg";
+  return "video/mp4";
 }
 
 function getPreviewUrl(endpointId: string, filename: string): string {
@@ -108,6 +122,9 @@ function getFileIcon(type: string, large = false) {
   if (isImageType(t)) {
     return <FileImage size={size} strokeWidth={strokeWidth} className="text-emerald-500" />;
   }
+  if (isVideoType(t)) {
+    return <FileVideo size={size} strokeWidth={strokeWidth} className="text-violet-500" />;
+  }
   if (["pdf"].includes(t)) {
     return <FileText size={size} strokeWidth={strokeWidth} className="text-red-500" />;
   }
@@ -123,6 +140,7 @@ function getFileIcon(type: string, large = false) {
 function getIconBg(type: string): string {
   const t = type.toLowerCase();
   if (isImageType(t)) return "bg-emerald-50";
+  if (isVideoType(t)) return "bg-violet-50";
   if (["pdf"].includes(t)) return "bg-red-50";
   if (CODE_EXTENSIONS.includes(t)) return "bg-amber-50";
   if (["txt", "log", "md"].includes(t)) return "bg-blue-50";
@@ -134,11 +152,13 @@ function FileThumbnail({ file, endpointId }: { file: FileItem; endpointId: strin
   const fileType = getFileType(file);
   const previewUrl = getPreviewUrl(endpointId, file.filename);
   const [failedImageUrl, setFailedImageUrl] = useState<string | null>(null);
+  const [failedVideoUrl, setFailedVideoUrl] = useState<string | null>(null);
   const [shouldLoadText, setShouldLoadText] = useState(false);
   const [textStatus, setTextStatus] = useState<"idle" | "loading" | "loaded" | "error">("idle");
   const [textPreview, setTextPreview] = useState("");
 
   const canShowImagePreview = isImageType(fileType) && failedImageUrl !== previewUrl;
+  const canShowVideoPreview = isVideoType(fileType) && failedVideoUrl !== previewUrl;
   const canShowTextPreview = isTextPreviewType(fileType) && file.fileSize <= MAX_TEXT_THUMBNAIL_SIZE;
 
   useEffect(() => {
@@ -226,6 +246,22 @@ function FileThumbnail({ file, endpointId }: { file: FileItem; endpointId: strin
     );
   }
 
+  if (canShowVideoPreview) {
+    return (
+      <div ref={previewRef} className="relative h-28 overflow-hidden bg-slate-950">
+        <video
+          src={previewUrl}
+          muted
+          playsInline
+          preload="metadata"
+          className="h-full w-full object-cover"
+          onError={() => setFailedVideoUrl(previewUrl)}
+        />
+        <div className="absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-slate-950/50 to-transparent" />
+      </div>
+    );
+  }
+
   if (canShowTextPreview && textStatus !== "error") {
     return (
       <div
@@ -270,6 +306,7 @@ function PreviewInspector({
   const previewUrl = getPreviewUrl(endpointId, file.filename);
   const downloadUrl = getDownloadUrl(endpointId, file.filename);
   const isImage = isImageType(fileType);
+  const isVideo = isVideoType(fileType);
   const isPdf = PDF_EXTENSIONS.includes(fileType);
   const isText = isTextPreviewType(fileType);
   const [textContents, setTextContents] = useState("");
@@ -381,6 +418,20 @@ function PreviewInspector({
           />
         )}
 
+        {isVideo && (
+          <div className="flex min-h-full flex-1 items-center justify-center bg-slate-950 p-4">
+            <video
+              controls
+              playsInline
+              preload="metadata"
+              className="max-h-[calc(100vh-240px)] max-w-full rounded-lg bg-black shadow-sm"
+            >
+              <source src={previewUrl} type={getVideoMimeType(fileType)} />
+              Your browser does not support video preview.
+            </video>
+          </div>
+        )}
+
         {isText && (
           <div className="flex min-h-full flex-1 flex-col p-4">
             {textLoading ? (
@@ -402,7 +453,7 @@ function PreviewInspector({
           </div>
         )}
 
-        {!isImage && !isPdf && !isText && (
+        {!isImage && !isVideo && !isPdf && !isText && (
           <div className="flex flex-1 flex-col items-center justify-center gap-4 p-8 text-center">
             <div className="rounded-xl bg-slate-100 p-4 text-slate-400">
               <FileText size={34} strokeWidth={1.5} />

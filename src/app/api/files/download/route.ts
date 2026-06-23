@@ -12,6 +12,10 @@ function getMimeType(filename: string): string {
     case "webp": return "image/webp";
     case "svg": return "image/svg+xml";
     case "pdf": return "application/pdf";
+    case "mp4": case "m4v": return "video/mp4";
+    case "webm": return "video/webm";
+    case "mov": return "video/quicktime";
+    case "ogv": case "ogg": return "video/ogg";
     case "txt": case "log": return "text/plain; charset=utf-8";
     case "json": return "application/json; charset=utf-8";
     case "csv": return "text/csv; charset=utf-8";
@@ -19,6 +23,15 @@ function getMimeType(filename: string): string {
     case "md": return "text/markdown; charset=utf-8";
     default: return "application/octet-stream";
   }
+}
+
+function resolveContentType(filename: string, contentType?: string | null): string {
+  const normalized = contentType?.split(";")[0]?.trim().toLowerCase();
+  if (!normalized || normalized === "application/octet-stream" || normalized === "binary/octet-stream") {
+    return getMimeType(filename);
+  }
+
+  return contentType ?? getMimeType(filename);
 }
 
 export async function GET(request: Request) {
@@ -42,7 +55,7 @@ export async function GET(request: Request) {
         const s3 = createS3Client(endpoint.endpointUrl, endpoint.accessKeyId, endpoint.secretKey);
         const response = await s3.send(new GetObjectCommand({ Bucket: endpoint.bucket, Key: filename }));
 
-        const contentType = response.ContentType || getMimeType(filename);
+        const contentType = resolveContentType(filename, response.ContentType);
         const body = response.Body;
         if (!body) throw new Error("Empty response from S3");
 
@@ -53,9 +66,10 @@ export async function GET(request: Request) {
             "Content-Disposition": `attachment; filename="${filename}"`,
           },
         });
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.error("S3 GetObject failed:", err);
-        return NextResponse.json({ error: `S3 Error: ${err?.message || "Failed to fetch file"}` }, { status: 502 });
+        const message = err instanceof Error ? err.message : "Failed to fetch file";
+        return NextResponse.json({ error: `S3 Error: ${message}` }, { status: 502 });
       }
     }
 
@@ -79,7 +93,7 @@ export async function GET(request: Request) {
       }
 
       const data = await response.arrayBuffer();
-      const contentType = response.headers.get("content-type") || getMimeType(filename);
+      const contentType = resolveContentType(filename, response.headers.get("content-type"));
 
       return new Response(data, {
         headers: {
@@ -87,8 +101,9 @@ export async function GET(request: Request) {
           "Content-Disposition": `attachment; filename="${filename}"`,
         },
       });
-    } catch (fetchError: any) {
-      return NextResponse.json({ error: `Failed to download file: ${fetchError.message || "Network error"}` }, { status: 502 });
+    } catch (fetchError: unknown) {
+      const message = fetchError instanceof Error ? fetchError.message : "Network error";
+      return NextResponse.json({ error: `Failed to download file: ${message}` }, { status: 502 });
     }
   } catch (error) {
     console.error("Download API error:", error);

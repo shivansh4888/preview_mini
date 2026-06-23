@@ -17,12 +17,20 @@ interface PreviewPageProps {
 }
 
 const IMAGE_EXTENSIONS = ["jpg", "jpeg", "png", "gif", "webp", "svg"];
+const VIDEO_EXTENSIONS = ["mp4", "m4v", "webm", "mov", "ogv", "ogg"];
 const TEXT_EXTENSIONS = ["txt", "json", "csv", "xml", "log", "md"];
 const PDF_EXTENSIONS = ["pdf"];
 
 function getExtension(filename: string): string {
   const parts = filename.split(".");
   return parts.length > 1 ? parts.pop()?.toLowerCase() || "" : "";
+}
+
+function getVideoMimeType(extension: string): string {
+  if (extension === "webm") return "video/webm";
+  if (extension === "mov") return "video/quicktime";
+  if (extension === "ogv" || extension === "ogg") return "video/ogg";
+  return "video/mp4";
 }
 
 export default function PreviewPage({ params, searchParams }: PreviewPageProps) {
@@ -38,6 +46,7 @@ export default function PreviewPage({ params, searchParams }: PreviewPageProps) 
   const [textError, setTextError] = useState<string | null>(null);
 
   const isImage = IMAGE_EXTENSIONS.includes(extension);
+  const isVideo = VIDEO_EXTENSIONS.includes(extension);
   const isPdf = PDF_EXTENSIONS.includes(extension);
   const isText = TEXT_EXTENSIONS.includes(extension);
 
@@ -81,14 +90,14 @@ export default function PreviewPage({ params, searchParams }: PreviewPageProps) 
         }
         if (bytes >= max) result += "\n\n[... Preview truncated at 100KB. Download to view full file ...]";
         setTextContents(result);
-      } catch (err: any) {
-        setTextError(err.message || "Failed to load file.");
+      } catch (err: unknown) {
+        setTextError(err instanceof Error ? err.message : "Failed to load file.");
       } finally {
         setTextLoading(false);
       }
     };
     load();
-  }, [isText, endpointId, fileId]);
+  }, [isText, endpointId, previewSourceUrl]);
 
   return (
     <div className="space-y-5 flex-1 flex flex-col">
@@ -125,9 +134,9 @@ export default function PreviewPage({ params, searchParams }: PreviewPageProps) 
       <div className="flex-1 rounded-2xl border border-slate-200 bg-white overflow-hidden flex flex-col shadow-sm min-h-[450px]">
         {/* Preview Type Bar */}
         <div className="border-b border-slate-100 bg-slate-50 px-5 py-2.5 flex items-center gap-2.5">
-          <div className={`w-2 h-2 rounded-full ${isImage ? "bg-emerald-500" : isPdf ? "bg-red-500" : isText ? "bg-blue-500" : "bg-slate-300"}`}></div>
+          <div className={`w-2 h-2 rounded-full ${isImage ? "bg-emerald-500" : isVideo ? "bg-violet-500" : isPdf ? "bg-red-500" : isText ? "bg-blue-500" : "bg-slate-300"}`}></div>
           <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-            {isImage ? "Image Preview" : isPdf ? "PDF Document" : isText ? "Text Preview" : "No Preview Available"}
+            {isImage ? "Image Preview" : isVideo ? "Video Preview" : isPdf ? "PDF Document" : isText ? "Text Preview" : "No Preview Available"}
           </span>
           <span className="ml-auto text-[10px] font-mono text-slate-400 uppercase">.{extension}</span>
         </div>
@@ -155,6 +164,21 @@ export default function PreviewPage({ params, searchParams }: PreviewPageProps) 
             />
           )}
 
+          {/* Videos */}
+          {isVideo && (
+            <div className="flex-1 flex items-center justify-center p-8 bg-slate-950">
+              <video
+                controls
+                playsInline
+                preload="metadata"
+                className="max-w-full max-h-[560px] rounded-xl bg-black shadow-md"
+              >
+                <source src={previewSourceUrl} type={getVideoMimeType(extension)} />
+                Your browser does not support video preview.
+              </video>
+            </div>
+          )}
+
           {/* Text files */}
           {isText && (
             <div className="flex-1 flex flex-col p-5">
@@ -178,7 +202,7 @@ export default function PreviewPage({ params, searchParams }: PreviewPageProps) 
           )}
 
           {/* Unsupported */}
-          {!isImage && !isPdf && !isText && (
+          {!isImage && !isVideo && !isPdf && !isText && (
             <div className="flex-1 flex flex-col items-center justify-center text-center p-12 gap-4">
               <div className="p-4 bg-slate-100 text-slate-400 rounded-2xl">
                 <FileText size={36} strokeWidth={1.5} />
